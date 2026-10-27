@@ -1,0 +1,33 @@
+# Unity .gitattributes
+
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Unity text-serialized files (Force text mode in Unity Project Settings)
+*.cs text diff=csharp
+*.cginc text
+*.shader text
+*.mat text merge=unityyamlmerge
+*.anim text merge=unityyamlmerge
+*.unity text merge=unityyamlmerge
+*.prefab text merge=unityyamlmerge
+*.physicsMaterial2D text merge=unityyamlmerge
+*.physicMaterial text merge=unityyamlmerge
+*.asset text merge=unityyamlmerge
+*.meta text merge=unityyamlmerge
+*.controller text merge=unityyamlmerge
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.psd binary
+*.tga binary
+*.wav binary
+*.mp3 binary
+*.ogg binary
+*.fbx binary
+*.obj binary
+*.blend binary
+*.dll binary
+*.so binary
