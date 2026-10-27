@@ -1,0 +1,36 @@
+name: Smart-Evac CI & Data Validation
+
+on:
+  push:
+    branches: [ main, develop, feature/*, Avikshith ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  validate-analytics:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Schema Validator on Sample Dataset
+        run: |
+          python3 analysis/schema_validator.py analysis/sample_ExperimentData.csv
+
+      - name: Run Analytics Test Suite
+        run: |
+          python3 analysis/test_analysis_pipeline.py
+
+      - name: Test Audio Asset Generator (Dry Run / Synthesis)
+        run: |
+          python3 tools/audio/generate_audio_assets.py --output-dir /tmp/test_audio
+
+      - name: Test Gemini API Tool (Offline Fallback Circuit Breaker)
+        run: |
+          python3 tools/gemini/test_gemini_api.py --offline

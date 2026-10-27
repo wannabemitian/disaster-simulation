@@ -1,0 +1,11 @@
+# Python Analysis Dependencies for Smart-Evac
+# Note: Core tools run with standard Python 3.9+ without external packages.
+# Installing these enables advanced visualization and stats packages.
+
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+requests>=2.31.0
+rich>=13.0.0
