@@ -1,0 +1,102 @@
+# Standard Unity .gitignore
+# Generated for Smart-Evac Unity Project
+
+# Ignore built-in generated and temporary folders
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+
+# Asset database cache
+/[Aa]ssets/[Aa]ssetStoreTools*
+
+# Visual Studio / VS Code / Rider project and solution files
+Visual Studio*
+.vs/
+ExportedObj/
+.consulo/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.idea/
+.vscode/
+
+# Unity crash reports
+sysinfo.txt
+*.stackdump
+
+# OS-generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+[Tt]humbs.db
+Desktop.ini
+
+# Builds
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# Experiment Output Data (Keep raw participant output out of version control, or commit separately)
+ExperimentData.csv
+
+# Python environment and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+*.key
+
+# Reports and generated plots (keep summary reports, ignore binary temp files)
+analysis/reports/*.png
+analysis/reports/*.jpg
+

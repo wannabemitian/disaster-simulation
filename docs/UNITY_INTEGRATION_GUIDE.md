@@ -2,6 +2,8 @@
 
 This guide details how external assets and specifications map directly into the Unity Editor.
 
+For a concrete floor plan and an importable scene blockout builder, start with [Unity Layout](UNITY_LAYOUT.md).
+
 ---
 
 ## 1. Physics Layers & Collision Matrix Configuration
