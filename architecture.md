@@ -1,222 +1,187 @@
-# Smart-Evac: System Architecture Specification
+# Smart-Evac: Current System Architecture
 
-## 1. Executive Summary & Objective
+Smart-Evac is currently a local Unity first-person fire and smoke simulation prototype. The player explores an office/maze environment, receives heat/smoke damage, sees a health bar change, and can restart after death. This document describes the implemented architecture. Exact fields, equations and saved scene values are in [technical.md](technical.md).
 
-**Smart-Evac** is a 3D first-person experimental testbed engineered in Unity to investigate **Human-AI Trust vs. Social Herding Behavior** in emergency evacuation scenarios. 
+## 1. Runtime boundary
 
-In real-world disasters, humans frequently abandon optimal egress routes to follow panicking crowds (social herding), even into deadly traps. Smart-Evac quantifies whether and when participants trust algorithmic guidance (spatial arrows or generative AI HUD warnings) over observable human behavior.
+The application runs inside the Unity Editor or a configured Unity player. Current gameplay uses local scene objects, CPU simulation arrays, Unity physics, particle systems, uGUI, and TextMeshPro. It has no connected backend, live AI warning service, or experiment telemetry writer.
 
----
-
-## 2. System Architecture Diagram
+The project root is `Disaster Management/`; the playable entry scene is `Assets/ScifiOfficeLite/Scene/Demo.unity`. The recorded Unity version is `6000.3.27f1`, using URP `17.3.0`.
 
 ```mermaid
-graph TD
-    subgraph Experimenter Controls
-        EC[Experimenter Controller Hotkeys<br/>1/2/3: Mode | R: Reset | P: Participant++]
-    end
-
-    subgraph Simulation Environment
-        HM[HazardManager<br/>Weighted Graph Cost Engine]
-        TRAPS[Fire & Smoke Hazard Colliders]
-        EXIT_TRIGGERS[Corridor Exit Trigger Colliders]
-    end
-
-    subgraph Crowd Simulation
-        NPC[NPCHerding System<br/>10-15 NavMeshAgent Capsules]
-    end
-
-    subgraph Player & Perception
-        PC[GazeAndController<br/>FPS Movement + Center-Raycast]
-        RAY[Physics.Raycast<br/>LayerMask: Signage_UI & Crowd_NPC]
-        INTER_TRIG[Intersection Decision Trigger Box]
-    end
-
-    subgraph Guidance Interfaces
-        MODE_A[Mode A: Static EXIT Wall Signs]
-        MODE_B[Mode B: Dynamic Glowing Floor Arrows]
-        MODE_C[Mode C: Live Gemini AI HUD + Voice/Chime]
-    end
-
-    subgraph External & Networking
-        GEMINI[Gemini Flash REST API<br/>Async Pre-fetch Pipeline]
-    end
-
-    subgraph Analytics & Telemetry
-        TL[TelemetryLogger<br/>StreamWriter Engine]
-        CSV[(ExperimentData.csv<br/>Project Root)]
-    end
-
-    EC -->|Sets Condition & Resets| HM
-    EC -->|Increments ID| TL
-    HM -->|Spawns Hazards| TRAPS
-    HM -->|Feeds Sensor State| GEMINI
-    HM -->|Sets Direction Target| MODE_B
-    HM -->|Designates Trap Route| NPC
-    NPC -->|Navigates Into Trap| TRAPS
-
-    PC -->|Triggers Intersection Box| INTER_TRIG
-    INTER_TRIG -->|Activates Cached Alert| MODE_C
-    PC -->|Casts Center Ray| RAY
-    RAY -->|Accumulates UI Look Time| TL
-    RAY -->|Accumulates Crowd Look Time| TL
-
-    PC -->|Reaches Corridor End| EXIT_TRIGGERS
-    EXIT_TRIGGERS -->|Logs Metrics Row| TL
-    TL -->|Appends Row| CSV
+flowchart TD
+    Controls[Keyboard / mouse input] --> Movement[RigidbodyMovement + DemoFirstPersonController]
+    Movement --> Player[Player position and physics]
+    Player --> Doors[SimpleDoor triggers]
+    Geometry[Scene colliders and layer masks] --> Topology[GridTopologyBaker]
+    Topology --> Manager[FireSimulationManager]
+    Markers[AutoIgniter markers] --> Manager
+    Manager --> Solver[FireSmokeSolver]
+    Solver --> Grid[CellState arrays]
+    Grid --> Particles[FireParticleSpawner]
+    Grid --> Bridge[HazardExposureAndVFXBridge]
+    Player --> Bridge
+    Bridge --> Fog[Global smoke fog]
+    Bridge --> Health[PlayerHealth]
+    Health --> HUD[Health Slider and fill color]
+    Health --> Death[Death pause and retry interface]
+    Death --> Restart[Button / R / Space]
+    Restart --> Reload[Reload Demo scene]
 ```
 
----
+`ClickToIgnite` is an optional source component that can also queue ignitions; the saved Demo scene uses automatic ignition markers.
 
-## 3. Trial State Machine & Lifecycle
+## 2. Repository and asset organization
 
-Each trial executes a deterministic experimental pipeline to ensure measurement validity:
+```text
+disaster-simulation/
+├── architecture.md
+├── technical.md
+├── Disaster Management/                  Unity project root
+│   ├── Assets/
+│   │   ├── ScifiOfficeLite/Scene/Demo.unity
+│   │   ├── ScifiOfficeLite/Scripts/       Demo camera/controller and door scripts
+│   │   ├── Scripts/                      Player health, restart UI, movement, doors, NPC source
+│   │   ├── RecoveredFire/
+│   │   │   ├── My_Scripts/               Grid simulation, ignition, particles, exposure
+│   │   │   └── UnityTechnologies/        Required fire/smoke effects and dependencies
+│   │   └── TextMesh Pro/                 Committed text resources
+│   ├── Packages/                         Package manifest and lockfile
+│   └── ProjectSettings/                  Editor, input, rendering and build settings
+├── analysis/                             Separate research analytics tooling
+├── tools/                                Separate audio/API utilities
+└── docs/                                 Research and integration documents
+```
+
+The current project uses Siva's scene/player work with the needed fire assets recovered from Avikshith. Original asset GUIDs are preserved through `.meta` files, allowing the Demo scene's fire references to resolve. The former unresolved `Fire_Asset` Git link is replaced by ordinary committed assets in `RecoveredFire`.
+
+Unity-generated caches and local inspection tooling are not required source dependencies. Older README/research documents may still describe the proposed experiment; these two documents describe the current runtime.
+
+## 3. Subsystem responsibilities and ownership
+
+| Subsystem | Implementation | Owns / produces |
+| --- | --- | --- |
+| Player movement | `RigidbodyMovement`, `ScifiOffice.DemoFirstPersonController` | Input, body velocity, view rotation, crouch |
+| Door interaction | `SimpleDoor` | Assigned door's local position in response to player triggers |
+| Topology | `GridTopologyBaker`, `CellTopology` | Initial obstacles, fuel and directional permeability |
+| Hazard orchestration | `FireSimulationManager` | Grid origin/dimensions, state arrays, tick timer, ignition queue |
+| Hazard integration | `FireSmokeSolver`, `SimParameters`, `CellState` | Heat, fuel, fire intensity and two smoke quantities |
+| Hazard presentation | `FireParticleSpawner` | Pooled particle instances and per-cell visual activation |
+| Player exposure | `HazardExposureAndVFXBridge` | Hazard sampling, damage calculation and global fog updates |
+| Player life state | `PlayerHealth` | Authoritative health, death guard, pause state and scene restart |
+| Death interface | `HealthGameOverUI` | Missing runtime retry controls and button callback |
+| Optional NPC behavior | `NPC_RandomWander` | Random NavMesh destinations where attached and configured |
+
+These components communicate through direct references and method calls. There is no implemented global experiment controller or event bus. `HazardExposureAndVFXBridge.playerHealth` mirrors `PlayerHealth.currentHealth` when a health component is found; it is not a second authority for the HUD/death flow. Without a `PlayerHealth` component, the bridge retains a legacy local-health fallback with no game-over interface.
+
+## 4. Scene composition
+
+The saved Demo scene includes the office/maze geometry, `Player`, `Main Camera`, `FireManager`, three ignition marker objects, HUD canvases, and an EventSystem. Functional associations are:
+
+```text
+FireManager
+  FireSimulationManager
+  FireParticleSpawner -> assigned fire and smoke prefabs
+  AutoIgniter -> three marker transforms, delay 1 second
+
+Player
+  Rigidbody movement / collision components
+  PlayerHealth -> assigned HealthBar Slider
+  HazardExposureAndVFXBridge -> grid sampler and damage bridge
+
+Camera/controller object
+  DemoFirstPersonController -> playerBody, input mode and mobile-control Canvas
+
+Runtime fallback UI, when no retry panel is assigned
+  GameOverCanvas
+    GameOverPanel
+      GameOverTitle
+      RestartHint
+      RestartButton
+```
+
+This is a component association map, not a complete literal Transform hierarchy. Environment objects and imported prefabs contain additional components. The saved `Mainscene` is not the complete simulation.
+
+## 5. Initialization and gameplay lifecycle
+
+1. Unity loads the scene and resolves package/asset references.
+2. `FireSimulationManager.Awake` bakes topology and creates the initial state buffers.
+3. `PlayerHealth.Awake` initializes health, finds the Slider fill, and prepares hidden retry UI.
+4. Particle startup prewarms fire/smoke pools; exposure startup finds the grid manager and health component and enables fog.
+5. `AutoIgniter` schedules marker-based fires. Each processed grid tick updates hazards; per-frame presentation reads the current grid.
+6. The bridge samples the player's X/Z position, calculates exposure damage and calls `TakeDamage`.
+7. Death reveals restart controls and pauses scaled-time simulation. Restart restores pause-related settings and reloads the scene.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle_Ready: Experimenter presses 'R' or '1/2/3'
-    
-    state Idle_Ready {
-        [*] --> SeedHazards
-        SeedHazards --> CalculateWeights: Evaluate W(path)
-        CalculateWeights --> SpawnHazards: Activate Fire & Smoke in 2 paths
-        SpawnHazards --> PreFetchAI: Async query Gemini Flash (Mode C)
-        PreFetchAI --> ReadyForEvac
-    }
-
-    Idle_Ready --> Evacuation_Active: Player departs spawn area (T_start logged)
-    
-    state Evacuation_Active {
-        [*] --> HallwaySprint: Crowd sprints toward trap
-        HallwaySprint --> InIntersection: Player enters Decision Trigger Collider
-        InIntersection --> DecisionLatencyTimer: Start timer & display UI Guidance
-        DecisionLatencyTimer --> CorridorChosen: Player exits trigger into chosen branch
-        CorridorChosen --> GazeMetricsActive: Track UI vs. Crowd focus
-    }
-
-    Evacuation_Active --> TrialComplete: Player touches Exit Trigger Box
-    
-    state TrialComplete {
-        [*] --> ComputeFinalMetrics
-        ComputeFinalMetrics --> StreamWriteCSV: Append row to ExperimentData.csv
-        StreamWriteCSV --> AwaitExperimenterHotkeys
-    }
-
-    TrialComplete --> Idle_Ready: 'R' (Reset Trial) or 'P' (Next Participant)
+    [*] --> Initializing
+    Initializing --> Playing: Scene components ready
+    Playing --> Playing: Input, hazard ticks, damage and HUD updates
+    Playing --> Dead: PlayerHealth reaches zero
+    Dead --> Restarting: Restart button, R or Space
+    Restarting --> Initializing: Reload player scene
 ```
 
----
+There is no current win/exit-completion state, participant ID, trial counter, or experiment condition selection. R/Space are restart controls after death, not general research trial-reset hotkeys.
 
-## 4. Subsystem Decomposition & Boundaries
-
-### 4.1 Hazard & State Engine (`HazardManager.cs`)
-* **Responsibility**: Maintains the authoritative ground truth of corridor states.
-* **Corridor State Enum**: `Left`, `Center`, `Right`.
-* **State Selection**:
-  * Randomly selects $1$ corridor as `SAFE`.
-  * Designates remaining $2$ corridors as `HAZARD` (Fire + Smoke).
-* **Cost Function**: Executes graph traversal calculations based on fire and smoke density:
-  $$W(\text{path}) = d_{\text{exit}} + (\alpha \cdot H_{\text{fire}}) + (\beta \cdot S_{\text{smoke}})$$
-  * Safe path: $H = 0, S = 0 \implies W = d_{\text{exit}}$.
-  * Trap paths: High $H$ and $S$ yields penalizing graph weights.
-* **Event Dispatching**: Emits `OnHazardLayoutGenerated(HazardState)` to inform the NPC flocking system and UI routers.
-
-### 4.2 Crowd Herding System (`NPCHerding.cs`)
-* **Responsibility**: Implements visual panic and social herding behavior.
-* **Agent Count**: 10–15 capsules with `NavMeshAgent` and `Crowd_NPC` LayerMask.
-* **Behavior Logic**:
-  * At trial start, agents are positioned just ahead of the player spawn.
-  * Agents bypass safe navigation calculations and intentionally select one of the active fire-trap corridors (or the primary burning exit).
-  * High velocity, high acceleration, and slight randomized arrival offsets simulate urgent collective panic.
-
-### 4.3 Guidance & Interface Subsystem
-Provides the independent variable conditions toggled by the experimenter:
-* **Mode A (Control - Static Signs)**:
-  * Static green standard emergency EXIT signs fixed on walls, oriented towards the main burning hallway where the crowd runs.
-* **Mode B (Spatial UI - Dynamic Floor Arrows)**:
-  * Glowing 3D floor arrows located at the intersection threshold.
-  * Dynamically rotate their `transform.rotation` to point down the vector of the designated safe corridor.
-* **Mode C (Live Generative AI HUD)**:
-  * Screen-space HUD text box linked to `AI_SupervisorAPI.cs`.
-  * High-urgency audio chime sound effect + pre-recorded directional voice clips (e.g., *"Warning: Evacuate via Right corridor"*) aligned with the pre-fetched safe corridor.
-
-### 4.4 Networking & Latency Mitigation (`AI_SupervisorAPI.cs`)
-* **Zero-Latency Pre-fetch Pattern**:
-  * Because emergency decision latency is measured in fractions of a second, awaiting an LLM network trip inside the intersection collider would invalidate `Decision_Latency_Sec`.
-  * **Architecture**: The API payload is constructed and dispatched via `UnityWebRequest` immediately upon trial initialization (`HazardManager.Start()` or `ResetTrial()`).
-  * The response is cached in memory. When the player steps into the intersection collider, the warning is surfaced with **0 ms UI latency**.
-  * **Fallback Circuit Breaker**: If network connectivity drops or the call exceeds 2.5s, an emergency rule-based cached prompt is utilized.
-
-### 4.5 Player Controller & Gaze Perception (`GazeAndController.cs`)
-* **Movement**: Lightweight first-person controller (CharacterController or Rigidbody) with mouse look and WASD translation.
-* **Physics Raycasting**:
-  * Casts an invisible continuous ray from the camera center (`Camera.main.transform.position`, `Camera.main.transform.forward`).
-  * Targets dedicated physics layers:
-    * Layer: `Signage_UI` $\rightarrow$ Increments `Gaze_Time_On_UI_Sec` via `Time.deltaTime`.
-    * Layer: `Crowd_NPC` $\rightarrow$ Increments `Gaze_Time_On_Crowd_Sec` via `Time.deltaTime`.
-  * The Raycast layer mask explicitly ignores environment geometry (walls, floors, ceiling) and volumetric smoke colliders to eliminate false positives.
-
-### 4.6 Telemetry & File I/O (`TelemetryLogger.cs`)
-* **Responsibility**: Flawlessly record experimental trial runs without introducing garbage collection (GC) pauses or disk I/O latency during gameplay.
-* **Output Path**: `Application.dataPath + "/../ExperimentData.csv"` (Project Root). This prevents the Unity Editor from triggering asset database re-imports upon file modification.
-* **Thread-safe StreamWriter**: Appends rows synchronously upon the player reaching an exit trigger volume, flushing and closing the stream immediately.
-
----
-
-## 5. Sequence Diagram: Mode C Evacuation Flow
+## 6. Hazard-to-health sequence
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    actor Exp as Experimenter
-    participant HM as HazardManager
-    participant AI as AI_SupervisorAPI
-    participant LLM as Gemini Flash API
-    participant NPC as NPCHerding
-    actor P as Participant (Player)
-    participant TRIG as Intersection Trigger
-    participant EXIT as Exit Trigger
-    participant TL as TelemetryLogger
-
-    Exp->>HM: Press 'R' (Start/Reset Trial)
-    HM->>HM: Determine Safe & Trap Corridors
-    HM->>NPC: Assign Panic Target (Trap Corridor)
-    HM->>AI: RequestPreFetch(sensorState)
-    AI->>LLM: POST /v1beta/models/gemini-2.5-flash:generateContent
-    LLM-->>AI: Return 1-Sentence Warning
-    AI->>AI: Cache response in memory
-
-    P->>NPC: Observes crowd sprinting toward burning corridor
-    P->>TRIG: Enters Intersection Trigger Box
-    TRIG->>TL: Start Decision_Latency timer
-    TRIG->>AI: TriggerDisplayWarning()
-    AI-->>P: Display cached text on HUD + Play Audio Chime/Voice
-
-    loop While In Decision Area & Corridors
-        P->>P: Gaze Raycast hit Signage_UI or Crowd_NPC
-        P->>TL: Update Gaze_Time_On_UI & Gaze_Time_On_Crowd
+    participant FM as FireSimulationManager
+    participant Solver as FireSmokeSolver
+    participant VFX as FireParticleSpawner
+    participant Bridge as HazardExposureAndVFXBridge
+    participant HP as PlayerHealth
+    participant UI as Health / retry UI
+    FM->>Solver: StepSimulation(read, write, topology, parameters)
+    Solver-->>FM: Updated cell states
+    FM->>FM: Swap state buffers
+    VFX->>FM: GetReadBuffer()
+    VFX->>VFX: Activate/reuse particle effects
+    Bridge->>FM: SampleHazardAtWorldPosition(player position)
+    FM-->>Bridge: Interpolated HazardSample
+    Bridge->>Bridge: Calculate heat/smoke damage and fog
+    Bridge->>HP: TakeDamage(amount)
+    HP->>UI: Update health value and fill color
+    alt Health reaches zero
+        HP->>HP: IsDead = true; timeScale = 0; pause audio
+        HP->>UI: Show retry panel; unlock cursor
+        UI->>HP: RetrySimulation()
+        HP->>HP: Restore settings and reload scene
     end
-
-    P->>TRIG: Exits Intersection Box into Corridor
-    TRIG->>TL: Stop Decision_Latency timer
-    
-    P->>EXIT: Crosses Corridor Exit Trigger
-    EXIT->>TL: OnEvacuationCompleted(corridorID)
-    TL->>TL: Compute Total Time, Safe Choice, Herding Match
-    TL->>TL: StreamWriter.WriteLine() to ExperimentData.csv
 ```
 
----
+There is no explicit execution-order attribute coordinating every manager/presentation `Update`; visuals and exposure use whichever current grid buffer is available when they execute.
 
-## 6. Physics Layers & LayerMask Strategy
+## 7. Simulation and physics boundaries
 
-To maximize performance and precision of the gaze tracking engine:
+The hazard model is a two-dimensional grid projected into a three-dimensional level. Topology comes from collider queries at initialization. The saved Demo wall mask selects no layers, so current grid propagation does not honor scene walls. Fuel queries use Default-layer colliders. Door motion does not update baked topology.
 
-| Layer Index | Layer Name | Physics Raycast Interaction | Purpose |
-| :--- | :--- | :--- | :--- |
-| **8** | `Signage_UI` | Hit by Gaze Raycast | Static exit signs (Mode A), glowing floor arrows (Mode B). |
-| **9** | `Crowd_NPC` | Hit by Gaze Raycast | NavMeshAgent crowd capsules. |
-| **10** | `Hazard_Fire` | Ignored by Gaze Raycast | Particle trigger damage/visual colliders. |
-| **11** | `Hazard_Smoke` | Ignored by Gaze Raycast | Volumetric particle fog colliders. |
-| **12** | `Trigger_Zones` | Ignored by Gaze Raycast | Intersection decision volume and exit goal triggers. |
-| **0** | `Default` | Ignored by Gaze Raycast | Hallway architecture (walls, floor, ceiling). |
+The grid stores upper/lower smoke scalars rather than a 3D fluid volume. Upper smoke diffuses and settles into lower smoke; local exposure changes global fog. These choices support the prototype's gameplay presentation, not a validated physical model.
+
+A layer-10 trigger-damage fallback remains in `PlayerHealth`, but is skipped when the grid damage bridge is present. The previous proposed signage/crowd/hazard layer matrix is not implemented as an authoritative project configuration.
+
+## 8. Research features and external dependencies
+
+The original design proposed AI-vs-crowd evacuation experiments. Those proposals are not the current runtime architecture:
+
+| Proposed capability | Current implementation status |
+| --- | --- |
+| Safe/trap corridor scoring and assignment | No connected `HazardManager` or weighted-route engine |
+| Coordinated crowd fleeing toward traps | Random-wander source exists; coordinated herding is absent |
+| Static/dynamic/AI guidance conditions | No connected A/B/C condition controller |
+| Gemini-generated warnings and directional speech | Separate utility scripts; no connected runtime API client |
+| Gaze and decision-latency measurement | No connected gaze/timing collector |
+| CSV trial export and participant progression | Analytics scaffolding exists; no runtime telemetry writer |
+| Successful evacuation outcome | No implemented win/exit lifecycle |
+
+Package presence alone does not establish a feature: the manifest includes AI, inference and multiplayer-related packages, but the current gameplay does not implement those services. Playing the implemented scene does not require a Gemini API key.
+
+## 9. Build readiness and known constraints
+
+Desktop Editor play is the current working workflow reported by the project owner. The recorded build scene list is empty. A standalone or Android player needs Demo included in its active build profile, including for scene-index-based restart.
+
+Android also requires matching Editor build modules, input/control configuration, and device testing. No completed APK or Android benchmark is claimed here.
+
+The saved 325,000-cell grid performs significant initialization, solver and particle-scan work on the CPU. Pools can expand beyond their initial size; gizmo rendering adds Editor work. The tick loop drops elapsed remainder rather than catching up, and random smoke uses an uncontrolled random sequence. Performance, reproducibility, obstacle-aware propagation, mobile controls and a win state remain areas for further implementation or validation.

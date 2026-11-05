@@ -1,305 +1,140 @@
-# Smart-Evac: Technical Implementation Specification
+# Smart-Evac: Current Technical Implementation
 
-## 1. Mathematical Formalism: Path Traversal Cost Model
+This document describes the Unity project currently committed in this repository. For subsystem boundaries and lifecycle diagrams, see [architecture.md](architecture.md).
 
-Path safety is evaluated using a weighted graph traversal cost function:
+## 1. Project and entry scene
 
-$$W(\text{path}) = d_{\text{exit}} + (\alpha \cdot H_{\text{fire}}) + (\beta \cdot S_{\text{smoke}})$$
+| Item | Current value |
+| --- | --- |
+| Unity project directory | `Disaster Management/` |
+| Recorded Editor version | Unity `6000.3.27f1` |
+| Playable scene | `Assets/ScifiOfficeLite/Scene/Demo.unity` |
+| Rendering | Universal Render Pipeline `17.3.0` |
+| Input System package | `1.20.1` |
+| Interface | Unity uGUI `2.0.0` and TextMeshPro resources |
+| Fire source directory | `Assets/RecoveredFire/My_Scripts/` |
+| Player/game-over source directory | `Assets/Scripts/` |
 
-### Parameter Specifications
+All asset paths below are relative to `Disaster Management/`. Open that directory through Unity Hub, allow packages to restore, open **Demo**, and enter Play Mode. `Assets/Scenes/Mainscene.unity` is a basic scene, not the simulation entry point.
 
-| Symbol | Parameter Name | Range | Unit / Meaning | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| $d_{\text{exit}}$ | Base Distance | $[20.0, 30.0]$ | Meters | Euclidean/NavMesh distance from intersection center to corridor exit. |
-| $H_{\text{fire}}$ | Fire Hazard Metric | $[0.0, 1.0]$ | Normalized Density | $0.0$ if corridor is clear; $1.0$ if active fire hazard is present. |
-| $S_{\text{smoke}}$ | Smoke Hazard Metric | $[0.0, 1.0]$ | Normalized Opacity | $0.0$ if clear; $[0.7, 1.0]$ if dense toxic particulate fog is present. |
-| $\alpha$ | Fire Cost Penalty Weight | $\ge 0.0$ | Scalar (Default: $100.0$) | Heavily penalizes flame presence in human pathing utility. |
-| $\beta$ | Smoke Cost Penalty Weight | $\ge 0.0$ | Scalar (Default: $50.0$) | Penalizes reduced visibility and respiratory hazard. |
+The recovered fire scripts, particle prefabs, materials, textures, and their `.meta` files are stored directly in the project. The old unresolved `Assets/Fire_Asset` Git reference has been removed. A separate asset repository is not required.
 
-### Path Cost Evaluation Example
-* **Safe Corridor (e.g., Right)**:
-  $$W(\text{Right}) = 25.0 + (100.0 \times 0.0) + (50.0 \times 0.0) = \mathbf{25.0}$$
-* **Burning Trap Corridor (e.g., Center)**:
-  $$W(\text{Center}) = 25.0 + (100.0 \times 1.0) + (50.0 \times 0.8) = 25.0 + 100.0 + 40.0 = \mathbf{165.0}$$
-* **Secondary Trap Corridor (e.g., Left)**:
-  $$W(\text{Left}) = 25.0 + (100.0 \times 1.0) + (50.0 \times 1.0) = \mathbf{175.0}$$
+## 2. Player controls and environment interaction
 
-The path with $\min(W)$ is designated as the ground-truth safe route.
+Two movement scripts are present in the Demo scene:
 
----
+- `Assets/Scripts/RigidbodyMovement.cs`: reads WASD from `Keyboard.current`; writes horizontal Rigidbody velocity in `FixedUpdate`; preserves vertical velocity and freezes Rigidbody rotation. Its code default speed is 5.
+- `Assets/ScifiOfficeLite/Scripts/DemoFirstPersonController.cs`: controls the camera/player body, legacy input movement, and crouching. The saved scene selects `keyboard` mode (`controlType = 1`) with speed 3 and mouse sensitivity 50. This mode uses W/S for forward/back movement and A/D for turning. **E** switches between keyboard and keyboard/mouse modes; Control or Shift crouches in desktop modes.
 
-## 2. Telemetry Schema (`ExperimentData.csv`)
+Both components can affect the same player body. Their combined behavior must be considered when tuning movement. The project currently enables both input backends; changing to a single backend requires checking both scripts.
 
-### File Path
-```csharp
-string csvPath = Path.Combine(Application.dataPath, "../ExperimentData.csv");
-```
-Saving outside the `Assets/` directory prevents editor compilation lag and AssetDatabase re-import locks.
+`SimpleDoor.cs` raises its assigned door by two local Y units when a collider associated with `RigidbodyMovement` enters its trigger, then restores the closed position on exit. The door reference must be assigned.
 
-### Column Definitions
+The demo controller also contains mobile button callbacks (`MobileWalk`, `MobileCrouch`) and an Android control mode. Their presence does not establish that the current scene is configured or validated for mobile play.
 
-| Column | Data Type | Permitted Values | Description |
-| :--- | :--- | :--- | :--- |
-| `Participant_ID` | `string` | `P001`, `P002`, ... | Monotonically incremented ID, managed via static integer. |
-| `UI_Mode` | `string` | `Static`, `DynamicArrow`, `AI_HUD` | Active guidance condition for the trial. |
-| `Safe_Path_Assigned` | `string` | `Left`, `Center`, `Right` | Procedurally designated safe corridor. |
-| `Player_Chosen_Path` | `string` | `Left`, `Center`, `Right` | Corridor in which player crossed the exit trigger collider. |
-| `Chose_Safe_Path` | `bool` | `True`, `False` | Evaluates if `Player_Chosen_Path == Safe_Path_Assigned`. |
-| `Followed_Crowd_Into_Trap`| `bool` | `True`, `False` | Evaluates if `Player_Chosen_Path == Crowd_Target_Path`. |
-| `Decision_Latency_Sec` | `float` (f2) | $\ge 0.00$ | Elapsed time between entering and exiting intersection trigger box. |
-| `Gaze_Time_On_UI_Sec` | `float` (f2) | $\ge 0.00$ | Cumulative seconds camera raycast was incident on `Signage_UI` layer. |
-| `Gaze_Time_On_Crowd_Sec`| `float` (f2) | $\ge 0.00$ | Cumulative seconds camera raycast was incident on `Crowd_NPC` layer. |
-| `Total_Evac_Time_Sec` | `float` (f2) | $\ge 0.00$ | Time elapsed from trial start/movement to touching exit trigger. |
+## 3. Fire and smoke data
 
-### Header Row
-```csv
-Participant_ID,UI_Mode,Safe_Path_Assigned,Player_Chosen_Path,Chose_Safe_Path,Followed_Crowd_Into_Trap,Decision_Latency_Sec,Gaze_Time_On_UI_Sec,Gaze_Time_On_Crowd_Sec,Total_Evac_Time_Sec
-```
+`FireSimData.cs` defines the structs used by the simulation:
 
----
+| Struct | Fields / role |
+| --- | --- |
+| `SimParameters` | Ambient, ignition and maximum temperature; burn/fuel rates; heat/smoke diffusivity; heat output; cooling coefficient |
+| `CellTopology` | Four directional permeability values, initial fuel and solid-obstacle flag |
+| `CellState` | Temperature, remaining fuel, fire intensity, upper smoke and lower smoke |
+| `HazardSample` | Interpolated temperature, fire intensity, upper smoke and lower smoke for player exposure |
 
-## 3. Core Script Architecture & Class Specifications
+The simulation is a CPU grid in the world X/Z plane. Y is not used when sampling a hazard. It is a gameplay approximation; no real-world fire or evacuation validation is established by this implementation.
 
-### 3.1 `HazardManager.cs`
-Controls path assignment, activates particle hazards, and updates spatial signage.
+### Saved Demo configuration
 
-```csharp
-public enum CorridorID { Left, Center, Right }
-public enum UIMode { Static, DynamicArrow, AI_HUD }
+Scene serialization overrides several code defaults. These are the saved `FireSimulationManager` values:
 
-public class HazardManager : MonoBehaviour
-{
-    [Header("Cost Weights")]
-    public float alpha = 100f;
-    public float beta = 50f;
+| Setting | Demo value |
+| --- | --- |
+| Grid dimensions | `500 × 650` (325,000 cells) |
+| Cell size | `1` world unit |
+| Tick interval | `0.1` seconds |
+| Random smoke | Enabled; probability `0.5` per processed tick |
+| Smoke injection amount | `20` upper-smoke units into one randomly selected non-solid cell |
+| Wall mask | `0` (no layers selected) |
+| Fuel mask | `1` (Default layer) |
+| Ambient / ignition / maximum temperature | `35 / 80 / 1000` |
+| Burn multiplier / fuel consumption rate | `1.5 / 0.015` |
+| Thermal / smoke diffusivity | `1.5 / 4` |
+| Heat output / cooling coefficient | `18000 / 0.025` |
+| Debug gizmos | Temperature |
 
-    [Header("Hazard References")]
-    public GameObject leftFireTrap;
-    public GameObject centerFireTrap;
-    public GameObject rightFireTrap;
+The code defaults are a `50 × 50` grid, ambient temperature 20, ignition temperature 200, thermal diffusivity 6, heat output 400 and cooling coefficient 0.02. Inspect the scene rather than assuming these defaults describe gameplay.
 
-    [Header("Guidance Mode Visuals")]
-    public GameObject modeAStaticSigns;
-    public GameObject modeBDynamicArrows;
-    public GameObject modeCHudCanvas;
+## 4. Simulation lifecycle and solver
 
-    public CorridorID SafeCorridor { get; private set; }
-    public CorridorID CrowdTargetCorridor { get; private set; }
-    public UIMode CurrentMode = UIMode.Static;
+`FireSimulationManager.Awake()` records its transform position as the grid origin, bakes topology, allocates two state arrays, and initializes temperature and fuel. `GridTopologyBaker` uses `Physics.CheckBox` for solid/fuel occupancy and `Physics.Linecast` for edge permeability. Fuel-covered cells use Perlin noise to vary initial fuel from 0.05 to 1.5; other open cells receive 0.05.
 
-    public void GenerateLayout();
-    public void SetUIMode(UIMode mode);
-    public float CalculatePathCost(CorridorID corridor, float fire, float smoke, float dist);
-}
-```
+On a processed tick, the manager optionally injects random smoke, processes queued ignition cells, runs `FireSmokeSolver.StepSimulation`, swaps read/write arrays, and resets its timer. The update processes at most one tick per frame and resets the timer to zero; it does not catch up all missed ticks under load. The current source calls `ProcessIgnitions()` twice; the first call drains the queue.
 
-### 3.2 `NPCHerding.cs`
-Controls the 10–15 panicking capsules simulating social herding.
+`AutoIgniter` queues ignition at three assigned scene markers after a one-second delay. `ClickToIgnite` is also available in source for mouse-raycast ignition, but is not attached in the saved Demo scene. `IgniteCell(x, z)` ignores out-of-range coordinates; processing skips solid cells and raises ignition temperature to the configured maximum with initial fire intensity 1.5.
 
-```csharp
-public class NPCHerding : MonoBehaviour
-{
-    [Header("Crowd Settings")]
-    public GameObject npcPrefab;
-    public int crowdCount = 12;
-    public Transform spawnOrigin;
-    public float spawnRadius = 2.5f;
-
-    [Header("Waypoint Targets")]
-    public Transform leftTrapPoint;
-    public Transform centerTrapPoint;
-    public Transform rightTrapPoint;
-
-    private List<NavMeshAgent> spawnedAgents = new List<NavMeshAgent>();
-
-    public void SpawnAndHerdCrowd(CorridorID targetTrap);
-    public void ResetCrowd();
-}
-```
-
-### 3.3 `AI_SupervisorAPI.cs`
-Communicates asynchronously with the Gemini Flash REST endpoint with instant zero-latency caching.
-
-```csharp
-[System.Serializable]
-public class GeminiContentRequest
-{
-    public Content[] contents;
-    [System.Serializable]
-    public class Content { public Part[] parts; }
-    [System.Serializable]
-    public class Part { public string text; }
-}
-
-public class AI_SupervisorAPI : MonoBehaviour
-{
-    [Header("API Configuration")]
-    [SerializeField] private string apiKey = "YOUR_GEMINI_API_KEY";
-    private const string API_URL_BASE = 
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=";
-
-    [Header("Audio Components")]
-    public AudioSource alertChimeSource;
-    public AudioSource voiceClipSource;
-    public AudioClip leftSafeVoiceClip;
-    public AudioClip centerSafeVoiceClip;
-    public AudioClip rightSafeVoiceClip;
-
-    [Header("UI Text Display")]
-    public TextMeshProUGUI hudWarningText;
-
-    private string cachedWarning = "";
-    private bool isPreFetched = false;
-
-    // Called on Scene/Trial Start
-    public void PreFetchWarning(CorridorID safeCorridor, string sensorStatus);
-    
-    // Called when player enters intersection collider
-    public void TriggerDisplayCachedAlert(CorridorID safeCorridor);
-}
-```
-
-#### Gemini Prompt Template
-```text
-System Instruction:
-"You are Smart-Evac, an emergency AI supervisor. An evacuation is in progress. 
-Sensors detect fire and toxic smoke in two paths. Output exactly ONE urgent sentence directing the occupant to the safe path and instructing them to ignore the panicking crowd."
-
-User Prompt:
-"Sensor Status: Left: [FIRE/SMOKE/CLEAR], Center: [FIRE/SMOKE/CLEAR], Right: [FIRE/SMOKE/CLEAR]. Designated safe exit: [SAFE_PATH]."
-```
-
-### 3.4 `GazeAndController.cs`
-Lightweight First-Person Controller and LayerMask-based Attention Raycasting.
-
-```csharp
-public class GazeAndController : MonoBehaviour
-{
-    [Header("Movement")]
-    public float moveSpeed = 4.5f;
-    public float mouseSensitivity = 2.0f;
-    public CharacterController characterController;
-    public Transform cameraTransform;
-
-    [Header("Attention Tracking")]
-    public LayerMask signageLayer;   // Layer 8: Signage_UI
-    public LayerMask crowdLayer;     // Layer 9: Crowd_NPC
-    public float maxRayDistance = 35f;
-
-    public float GazeTimeUI { get; private set; }
-    public float GazeTimeCrowd { get; private set; }
-
-    void Update()
-    {
-        HandleMovement();
-        HandleGazeRaycast();
-    }
-
-    private void HandleGazeRaycast()
-    {
-        Ray ray = new Ray(cameraTransform.position, cameraTransform.forward);
-        RaycastHit hit;
-
-        if (Physics.Raycast(ray, out hit, maxRayDistance, signageLayer))
-        {
-            GazeTimeUI += Time.deltaTime;
-        }
-        else if (Physics.Raycast(ray, out hit, maxRayDistance, crowdLayer))
-        {
-            GazeTimeCrowd += Time.deltaTime;
-        }
-    }
-
-    public void ResetGazeMetrics();
-}
-```
-
-### 3.5 `TelemetryLogger.cs` & `ExperimenterController.cs`
-Orchestrates metrics aggregation and manual researcher keybinds.
-
-```csharp
-public class ExperimenterController : MonoBehaviour
-{
-    public static int currentParticipantID = 1;
-
-    void Update()
-    {
-        if (Input.GetKeyDown(KeyCode.Alpha1)) FindObjectOfType<HazardManager>().SetUIMode(UIMode.Static);
-        if (Input.GetKeyDown(KeyCode.Alpha2)) FindObjectOfType<HazardManager>().SetUIMode(UIMode.DynamicArrow);
-        if (Input.GetKeyDown(KeyCode.Alpha3)) FindObjectOfType<HazardManager>().SetUIMode(UIMode.AI_HUD);
-        
-        if (Input.GetKeyDown(KeyCode.R)) ResetCurrentTrial();
-        
-        if (Input.GetKeyDown(KeyCode.P))
-        {
-            currentParticipantID++;
-            Debug.Log($"[Smart-Evac] Next Participant ID: P{currentParticipantID:D3}");
-        }
-    }
-
-    public void ResetCurrentTrial();
-}
-
-public class TelemetryLogger : MonoBehaviour
-{
-    private float decisionStartTime;
-    private float totalStartTime;
-    private bool insideIntersection = false;
-    public float DecisionLatency { get; private set; }
-
-    public void OnEnterIntersectionTrigger();
-    public void OnExitIntersectionTrigger();
-    public void OnCorridorExitReached(CorridorID chosenCorridor);
-    private void WriteRowToCSV(string rowContent);
-}
-```
-
----
-
-## 4. Unity Scene Hierarchy & Setup Blueprint
+The solver uses four-neighbor heat and upper-smoke diffusion, fuel consumption, combustion heat, cooling toward ambient, and transfer from upper to lower smoke. Its diffusion substep calculation is:
 
 ```text
-SmartEvac_MainScene
-├── [Managers]
-│   ├── HazardManager (Script)
-│   ├── AI_SupervisorAPI (Script, AudioSources)
-│   ├── TelemetryLogger (Script)
-│   └── ExperimenterController (Script)
-├── [Environment]
-│   ├── MainHallway (Colliders, Walls, Floor)
-│   ├── Intersection_Node
-│   │   └── Intersection_TriggerZone (Trigger BoxCollider, Layer: Trigger_Zones)
-│   ├── Corridor_Left
-│   │   ├── Hazard_Fire_Left (ParticleSystem, Lights, Colliders)
-│   │   └── Exit_Trigger_Left (Trigger BoxCollider -> CorridorID.Left)
-│   ├── Corridor_Center
-│   │   ├── Hazard_Fire_Center
-│   │   └── Exit_Trigger_Center (Trigger BoxCollider -> CorridorID.Center)
-│   └── Corridor_Right
-│       ├── Hazard_Fire_Right
-│       └── Exit_Trigger_Right (Trigger BoxCollider -> CorridorID.Right)
-├── [Crowd_Group]
-│   ├── CrowdSpawnOrigin
-│   └── NPCHerdingManager (Script)
-├── [Guidance_UI]
-│   ├── ModeA_StaticSigns (Layer: Signage_UI)
-│   ├── ModeB_DynamicArrows (Layer: Signage_UI, Dynamic rotation script)
-│   └── ModeC_HUDCanvas (Canvas ScreenSpace-Overlay)
-│       └── WarningAlertText (TextMeshProUGUI)
-└── [Player_FirstPerson]
-    ├── CharacterController
-    ├── GazeAndController (Script)
-    └── Main Camera (Raycast Source)
+maxDiff = max(thermalDiffusivity, smokeDiffusivity)
+maxStableDt = cellSize² / (4.01 × maxDiff)
+subSteps = ceil(tickInterval / maxStableDt)
+dt = tickInterval / subSteps
 ```
 
----
+Temperature is clamped to ambient/maximum limits; upper/lower smoke are each clamped to 0–100. The first substep reads the original buffer; subsequent substeps read and write the output buffer in place, so this is not a fully double-buffered numerical solver at every substep. Lower smoke accumulates without a separate removal term. Topology is baked once; doors moving afterward do not rebake permeability.
 
-## 5. Audio Pipeline Configuration (Mode C)
+## 5. Particle rendering and fog
 
-1. **Alert Chime**: Short, piercing 800Hz two-tone alarm ($120\text{ ms}$) played immediately upon crossing intersection threshold.
-2. **Voice Synthesis Mappings**:
-   * Safe Corridor `Left` $\rightarrow$ `Voice_EvacuateLeft.wav`
-   * Safe Corridor `Center` $\rightarrow$ `Voice_EvacuateCenter.wav`
-   * Safe Corridor `Right` $\rightarrow$ `Voice_EvacuateRight.wav`
-3. **Execution Sequence**:
-   `AudioSource.PlayOneShot(alertChime)` $\rightarrow$ Delay $150\text{ ms}$ $\rightarrow$ `AudioSource.PlayOneShot(selectedVoiceClip)`.
+`FireParticleSpawner` maintains per-cell fire/smoke references and initially creates pools of 50 instances of each assigned particle prefab. Pools can grow when exhausted.
+
+| Visual | Activation and emission |
+| --- | --- |
+| Fire | Active above fire intensity 0.1; emission = intensity × 20 |
+| Smoke | Active above combined smoke 0.5; emission = clamp(combined smoke × 0.2, 0, 8) |
+
+Smoke particles are positioned 1.5 world units above their grid position. Inactive effects are stopped and returned to their pools. The spawner scans the full grid every rendered frame.
+
+`HazardExposureAndVFXBridge` samples the grid at the player's position and enables global exponential-squared fog. Combined smoke drives fog density toward a maximum of 0.15 and blends the configured gray/near-black colors. This is global fog driven by local exposure, not a three-dimensional smoke volume.
+
+## 6. Shared health, HUD and death
+
+The authoritative player health is `PlayerHealth.currentHealth`. The hazard bridge calls `PlayerHealth.TakeDamage()` and mirrors the result into its legacy `playerHealth` field. This connects fire/smoke damage to both the HUD and death state.
+
+For each frame with duration `deltaTime`, damage is calculated as:
+
+```text
+heatDamage = 0, if temperature <= 60
+heatDamage = clamp01((temperature - 60) / (maxFireTemp - 60))
+             × burnDamageRate × deltaTime, otherwise
+
+smokeDamage = 0, if smokeLower <= 1
+smokeDamage = smokeLower × smokeChokeRate × deltaTime, otherwise
+```
+
+The Demo bridge uses burn rate 10 and smoke rate 5. `PlayerHealth.Awake()` sets health to its maximum (100 in Demo), configures the assigned Slider, finds its Fill Image if needed, and ensures a restart interface exists. The bar interpolates with unscaled delta time; the fill changes from green through yellow to red based on remaining health.
+
+`TakeDamage` ignores nonpositive/NaN damage and damage after death, clamps health to zero/maximum, and enters death once. The layer-10 trigger-damage fallback is bypassed when the player has the hazard bridge, avoiding duplicate damage. Layer 10 is a numeric fallback in code; it is not proof that a named fire layer is configured.
+
+At death, `PlayerHealth` immediately empties the bar, shows the retry panel, sets `Time.timeScale = 0`, pauses audio, and unlocks/shows the cursor. This pauses scaled-time simulation and physics; UI and other unscaled/update logic can still run.
+
+`HealthGameOverUI.Ensure()` supplies a screen-space overlay Canvas, dim background, TextMeshPro message, and Restart button when references are missing. The generated Canvas uses sorting order 1000 and reference resolution `1280 × 720`. It reuses an existing EventSystem or creates one if absent. Runtime-generated UI is not saved back into the scene.
+
+After death, **R**, **Space**, or **Restart** reloads the player's scene. Pause/audio/cursor settings are restored before reload and when the component is destroyed. In the Editor, restart uses `EditorSceneManager.LoadSceneInPlayMode`; a built player uses the scene's build index.
+
+## 7. NPC and research tooling status
+
+`NPC_RandomWander.cs` exists and requires a `NavMeshAgent`. It chooses random destinations within radius 15 using `NavMesh.SamplePosition` and area mask 1. There is no direct reference to this script in the saved Demo scene; prefab usage and NavMesh setup must be checked before claiming working crowd behavior. It does not implement coordinated evacuation or social herding.
+
+The `analysis/`, `tools/audio/`, `tools/gemini/`, and research documents remain as separate scaffolding. The current Unity gameplay scripts do not implement or call the previously specified `HazardManager`, `NPCHerding`, `AI_SupervisorAPI`, `GazeAndController`, `TelemetryLogger`, or `ExperimenterController` systems. There is no connected live Gemini guidance, corridor cost scoring, A/B/C guidance selection, gaze measurement, participant progression, CSV trial export, or successful-evacuation state. Sample analytics data is not evidence of gameplay-generated telemetry.
+
+## 8. Build and verification boundaries
+
+The committed `ProjectSettings/EditorBuildSettings.asset` has an empty scene list. Add `Assets/ScifiOfficeLite/Scene/Demo.unity` to the active build profile before building; restart in a standalone/Android player requires the scene to have a valid build index.
+
+For an Android build, install Android Build Support with matching SDK/NDK/OpenJDK modules for the Editor version actually used. Tools installed on one laptop are not repository dependencies available on every machine. An APK and mobile performance/input validation have not been established by this repository state.
+
+Health changes compiled successfully in the connected Editor, and the project owner reported the health/restart behavior working in Play Mode. A complete automated playthrough, APK build, and benchmark were not completed as part of this update.
+
+Performance-sensitive areas include the 325,000-cell topology bake, full-grid solver work, per-frame particle scan, growing particle pools, and temperature gizmos. With the saved wall mask of zero, wall collisions do not block the simulation grid. The run is not deterministic because it uses Unity random smoke injection without a controlled seed.
