@@ -1,36 +1,50 @@
-# Smart-Evac: Real-Time Fire & Disaster Simulation
+# Smart-Evac: Fire and Smoke Simulation
 
-A first-person emergency disaster simulation built in Unity. Players navigate an office maze as active fire and toxic smoke propagate dynamically across the level, testing real-time hazard awareness, exposure damage, and evacuation decision-making.
+A Unity first-person disaster simulation set in an office maze environment. Players navigate hallways while dynamic fire and smoke spread across a real-time 2D simulation grid, taking heat and smoke damage, managing visibility in thickening fog, and reacting to emergency conditions.
 
 ---
 
-## Project Overview
+## What the Simulation Does
 
-Smart-Evac simulates the physical realities of an indoor structural fire. Unlike scripted game fires that simply sit in place, our environment features a live simulation grid where heat and smoke propagate through hallways, accumulate over time, and dynamically degrade air quality.
+Smart-Evac models the progression of an indoor building fire and its direct impact on a person trying to navigate through it:
 
-### Key Systems & Engineering Highlights
+- **Active 2D Hazard Grid**: Rather than static particle emitters, fire evolves across a 500 × 650 cell grid (325,000 cells). Three scene markers ignite automatically at startup, and the solver calculates continuous fuel burning, heat diffusion, and cooling across neighboring cells.
+- **Two-Layer Smoke Dynamics**: The solver tracks two distinct smoke layers—hot upper smoke rising to the ceiling, and lower smoke that builds up and fills the walkable breathing space.
+- **Exposure Damage & Health HUD**: The simulation continuously samples temperature and smoke levels at the player's position. Ambient heat above 60°C causes burn damage, and lower-level smoke causes choke damage. A color-coded HUD slider (green → yellow → red) reflects remaining health in real time.
+- **Dynamic Visibility & Fog**: Local smoke concentration directly controls scene-wide exponential fog density and color blending. As smoke spreads through the corridors, visibility drops significantly, forcing the player to navigate with limited sightlines.
+- **Object Pooling**: Fire and smoke visual effects are spawned from pre-allocated pools, avoiding runtime instantiate/destroy overhead during gameplay.
+- **Interactive Level & Restart Loop**: The environment features automatic trigger-operated doors, first-person camera and movement controls, and an instant game-over screen with single-key restart (`R` or `Space`).
 
-* **Dynamic Hazard Propagation**: A real-time grid simulation (325,000 cells) calculates continuous heat spread, fuel depletion, and two-layer smoke accumulation—tracking both the hot ceiling layer and suffocating lower air.
-* **Physiological Damage & Exposure**: Hazards are sampled continuously at the player's exact coordinates. High temperatures cause severe burn damage while lower smoke induces choke damage, visually tracked by a reactive green-to-red health HUD.
-* **Atmospheric Volumetric Fog**: Local smoke concentration dynamically drives scene-wide exponential fog density and color blending, realistically restricting visibility and disorienting the player as fire spreads.
-* **Interactive Environment**: Built inside an expansive office maze featuring trigger-activated doors, dual-backend movement controls, automated ignition points, and an instant game-over/retry loop.
-* **Optimized for Real-Time Performance**: Employs object pooling for fire and smoke particle effects to eliminate frame-rate stutter and garbage collection spikes.
+---
 
-### System Architecture Flow
+## System Architecture
 
 ```mermaid
 flowchart TD
-    Input[Player Input & Camera] --> Player[Rigidbody Movement]
-    Player --> Doors[Automatic Door Triggers]
-    Ignition[Ignition Markers] --> Sim[Fire & Smoke Grid Solver]
-    Sim --> VFX[Pooled Fire & Smoke VFX]
-    Sim --> Bridge[Exposure & VFX Bridge]
+    Input[Player Input & Camera] --> Player[Rigidbody Movement & Controller]
+    Player --> Doors[SimpleDoor Triggers]
+    Ignition[AutoIgniter Markers] --> Solver[Fire & Smoke Grid Solver]
+    Solver --> Grid[500x650 Cell State Arrays]
+    Grid --> Particles[Pooled Fire & Smoke VFX]
+    Grid --> Bridge[Hazard Exposure Bridge]
     Player --> Bridge
-    Bridge --> Fog[Reactive Global Smoke Fog]
-    Bridge --> Health[Player Health System]
-    Health --> HUD[Dynamic Health Bar HUD]
-    Health --> GameOver[Game Over & Instant Scene Restart]
+    Bridge --> Fog[Global Smoke Fog Density]
+    Bridge --> Health[PlayerHealth System]
+    Health --> HUD[Dynamic Health Bar Slider]
+    Health --> GameOver[Game Over Overlay & Scene Restart]
 ```
+
+---
+
+## Open and Run
+
+1. Open **Unity Hub** and make sure you have **Unity `6000.3.27f1`** (Universal 3D / URP).
+2. Click **Add project from disk** and select the **`Disaster Management`** folder inside this repository (this folder directly contains `Assets`, `Packages`, and `ProjectSettings`).
+3. Allow Unity to restore packages and import assets.
+4. Open the showcase scene: **`Assets/ScifiOfficeLite/Scene/Demo.unity`** (pre-configured as default Scene 0 in build settings).
+5. Press **Play** and click into the Game view.
+
+> **Note**: `Assets/Scenes/Mainscene.unity` is a lightweight test scene; use **Demo** for the full simulation. All required fire materials, particle prefabs, and scripts are self-contained under `Assets/RecoveredFire`. A Gemini API key and external Python tools are not required for running the simulation.
 
 ---
 
@@ -38,28 +52,78 @@ flowchart TD
 
 | Key / Input | Action |
 | :--- | :--- |
-| **W / S** | Move Forward / Backward |
-| **A / D** | Strafe / Turn |
-| **Mouse** | Look around (Mouse Mode) |
-| **E** | Toggle Mouse Look Mode |
+| **W / S** | Move forward / backward |
+| **A / D** | Strafe / turn |
+| **E** | Toggle between keyboard mode and keyboard/mouse mode |
+| **Mouse** | Look around (in keyboard/mouse mode) |
 | **Ctrl / Shift** | Crouch |
 | **R / Space** | Restart after death |
-| **Restart Button** | UI click on Game Over to reload |
+| **Restart Button** | Click on-screen button after death to reload scene |
 
 ---
 
-## Quick Start & Evaluation Guide
+## Health & Game Over Loop
 
-1. **Unity Version**: Built and verified for **Unity 6 (`6000.3.27f1`)** with Universal Render Pipeline (URP).
-2. **Open Project**:
-   * Open **Unity Hub** $\rightarrow$ Click **Add project from disk**.
-   * Select the **`Disaster Management`** folder inside this repository.
-3. **Run the Simulation**:
-   * **`Assets/ScifiOfficeLite/Scene/Demo.unity`** is pre-configured as the primary default scene (Scene Index 0).
-   * Press **Play** in the Unity Editor and click inside the Game view.
+- **Exposure Thresholds**: Heat above 60°C and lower-layer smoke above 1.0 continuously deplete health via `PlayerHealth`. Max health is 100.
+- **Visual Feedback**: The health bar slider smoothly interpolates and shifts colors from green to yellow to red as health drops.
+- **Death & Reset**: Reaching zero health immediately pauses scaled-time gameplay and audio, unlocks the mouse cursor, and presents the retry overlay. Pressing `R`, `Space`, or clicking **Restart** reloads the scene and resets all simulation state.
 
 ---
 
-## Technical & Architecture Documentation
-* [Technical Specifications](technical.md) – In-depth grid parameters, exposure thresholds, and component tuning.
-* [System Architecture](architecture.md) – Detailed component lifecycle, state machines, and data flow.
+## Project Layout
+
+```text
+disaster-simulation/
+├── README.md                     Project overview and run guide
+├── technical.md                  Grid parameters, solver formulas, and scene settings
+├── architecture.md               Subsystem ownership, lifecycles, and diagrams
+├── Disaster Management/          Unity project root (open this in Unity Hub)
+│   ├── Assets/
+│   │   ├── ScifiOfficeLite/      Demo scene, office environment, and controllers
+│   │   ├── Scripts/             Health, game-over UI, movement, and door triggers
+│   │   ├── RecoveredFire/       Grid solver, spawner, and fire/smoke VFX assets
+│   │   └── TextMesh Pro/        UI font and rendering resources
+│   ├── Packages/                Package manifest and locked dependencies
+│   └── ProjectSettings/         Pre-configured layers, input, and build settings
+├── analysis/                     Analytics scripts and sample telemetry
+├── tools/                        Audio generation and utility scripts
+└── docs/                         Earlier research protocols and integration notes
+```
+
+---
+
+## Documentation
+
+- **[Technical Implementation](technical.md)**: Solver variables, exposure equations, HUD settings, and build requirements.
+- **[System Architecture](architecture.md)**: Subsystem boundaries, component interactions, and lifecycle flows.
+- **[Research Protocol](docs/EXPERIMENT_PROTOCOL.md)**: Original research context regarding evacuation experiments and social herding studies.
+
+---
+
+## Standalone Build
+
+The scene **`Assets/ScifiOfficeLite/Scene/Demo.unity`** is pre-configured at **Scene Index 0** in `EditorBuildSettings.asset`.
+
+To build a standalone Windows player (`.exe`):
+1. In Unity, go to **File → Build Profiles** (or **Build Settings**).
+2. Ensure the platform is set to **Windows**.
+3. Click **Build** and choose an output folder.
+
+---
+
+## Current Technical Notes & Limitations
+
+- **Grid Resolution**: The saved hazard grid is **500 × 650 cells** (325,000 cells). Running large CPU grids can have performance implications depending on hardware.
+- **Wall Occlusion**: In the current demo scene configuration, the wall mask is set to zero, meaning fire and smoke propagate through geometry rather than strictly being blocked by door frames.
+- **Random Smoke Variation**: Smoke injection uses a random distribution factor (0.5 probability per tick) to create varied spread patterns across runs.
+- **Crowd Mechanics**: NPC wander code (`NPC_RandomWander.cs`) is present in the repository, but active crowd agents are not hooked into the saved Demo scene.
+- **Research Utilities**: Tools under `analysis/` and `tools/` represent outside-engine experimental scaffolding and are not required for the interactive Unity simulation.
+
+---
+
+## Common Startup Issues
+
+- **Unity Hub says "Select a valid project"**: Choose the inner `Disaster Management` folder, not the outer repository root or its `Assets` folder.
+- **An empty scene opens**: Double-click `Assets/ScifiOfficeLite/Scene/Demo.unity` from the Project browser.
+- **Unity license prompt**: Log in to Unity Hub and ensure your free Personal or Educational license is activated.
+- **Console Warnings**: Read full messages in **Window → General → Console**. Do not delete project assets or meta files to clear warnings.
